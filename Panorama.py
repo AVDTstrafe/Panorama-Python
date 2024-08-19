@@ -3,10 +3,13 @@ import cv2
 
 class Stitcher:
     def __init__(self):
-        # Initialize the feature extractor, using SIFT for detecting keypoints and descriptors
-        self.feature_extractor = cv2.SIFT_create()
+        # Initialize the feature extractor
+        self.feature_extractor = cv2.AKAZE_create()
 
     def stitch(self, img_left, img_right):
+
+        print("panorama underway this will take a couple of minutes")
+
         # Enhance image contrast by equalizing the histogram of both images
         img_left = self.equalize_histogram_color(img_left)
         img_right = self.equalize_histogram_color(img_right)
@@ -27,19 +30,19 @@ class Stitcher:
         # STEP - 5 Warp images to the same perspective and stitch them together
         result_image = self.warping(img_right, img_left, M)
 
-        # STEP - 6 Show the resulting stitched image
-        cv2.imshow('Result', result_image)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        # STEP - 6 Return the stitched image
+        return result_image
+
     def compute_descriptors(self, img):
-        # Compute keypoints and descriptors for an image using the SIFT feature extractor
+        # Compute keypoints and descriptors for an image
         grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         keypoints, descriptors = self.feature_extractor.detectAndCompute(grey, None)
         return keypoints, descriptors
+
     def matching(self, descriptors_l, descriptors_r):
         matches = []
-        ratio_threshold = 0.75  # Lowe's ratio test threshold
-        distance_threshold = 100  # Optional distance threshold to filter out distant matches
+        ratio_threshold = 0.75  # ratio test threshold
+        distance_threshold = 100  # distance threshold
 
         # Iterate through each descriptor in the left image
         for i, desc_l in enumerate(descriptors_l):
@@ -51,24 +54,23 @@ class Stitcher:
             closest_idx = sorted_indices[0]
             second_closest_idx = sorted_indices[1]
 
-            # Apply Lowe's ratio test
+            # Apply thresholds
             if distances[closest_idx] < ratio_threshold * distances[second_closest_idx] and distances[
                 closest_idx] < distance_threshold:
                 match = cv2.DMatch(i, closest_idx, distances[closest_idx])
                 matches.append(match)
 
         return matches
+
     def draw_matches(self, img_left, img_right, matches, keypoints_l, keypoints_r):
         img_with_correspondences = cv2.drawMatches(img_left, keypoints_l, img_right, keypoints_r, matches, None)
-        cv2.imshow('correspondences', img_with_correspondences)
+        cv2.imshow('Correspondences', img_with_correspondences)
         cv2.waitKey(0)
 
     def find_homography(self, keypoints_l, keypoints_r, matches):
-        '''
-        Manually find the homography matrix between two images using DLT.
-        '''
         if len(matches) < 4:
-            raise ValueError("At least 4 matches are required to compute a homography.")
+            print("Not enough matches to compute homography.")
+            return None
 
         # Arrays to store the corresponding points
         src1_pts = np.float32([keypoints_l[m.queryIdx].pt for m in matches])
@@ -93,9 +95,50 @@ class Stitcher:
         # Normalize and return the homography matrix
         return H / H[2, 2]
 
+    def warping(self, img_left, img_right, H):
+        h1, w1 = img_left.shape[:2]
+        h2, w2 = img_right.shape[:2]
+
+        img1_dims = np.float32([[0, 0], [0, h1], [w1, h1], [w1, 0]]).reshape(-1, 1, 2)
+        img2_dims_temp = np.float32([[0, 0], [0, h2], [w2, h2], [w2, 0]]).reshape(-1, 1, 2)
+
+        img2_dims = cv2.perspectiveTransform(img2_dims_temp, H)
+        result_dims = np.concatenate((img1_dims, img2_dims), axis=0)
+
+        [x_min, y_min] = np.int32(result_dims.min(axis=0).ravel() - 0.5)
+        [x_max, y_max] = np.int32(result_dims.max(axis=0).ravel() + 0.5)
+
+        transform_dist = [-x_min, -y_min]
+        transform_array = np.array([[1, 0, transform_dist[0]], [0, 1, transform_dist[1]], [0, 0, 1]])
+
+        result = cv2.warpPerspective(img_right, transform_array.dot(H), (x_max - x_min, y_max - y_min))
+        result[transform_dist[1]:h1 + transform_dist[1], transform_dist[0]:w1 + transform_dist[0]] = img_left
+
+        return result
+
+    def equalize_histogram_color(self, img):
+        img_yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+        img_yuv[:, :, 0] = cv2.equalizeHist(img_yuv[:, :, 0])
+        img = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
+        return img
+
 if __name__ == "__main__":
     img_left = cv2.imread('img_left.jpg')
     img_right = cv2.imread('img_right.jpg')
 
     stitcher = Stitcher()
     result = stitcher.stitch(img_left, img_right)
+
+    cv2.imshow('Stitched Result', result)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    img_left = cv2.imread('IL.jpg')
+    img_right = cv2.imread('IR.jpg')
+
+    stitcher = Stitcher()
+    result = stitcher.stitch(img_left, img_right)
+
+    cv2.imshow('Stitched Result', result)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
